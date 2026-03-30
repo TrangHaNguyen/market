@@ -1,0 +1,272 @@
+ORCA SETUP AND BATCH SUBMISSION GUIDE
+
+This file gives a full command-line workflow for:
+- connecting to ORCA (for example, with `ssh orca` if you saved the host info in your SSH config)
+- cloning or updating this repo on ORCA
+- creating the Python environment
+- submitting run_all.slurm
+- checking logs, outputs, and checkpoints
+
+==================================================
+1. FIRST-TIME SETUP ON ORCA
+==================================================
+Set up a configuration file .config in which store your orca account and key in your computer. After that, each time you only need to run following code from your local terminal:
+
+ssh your_username@orca
+
+On ORCA:
+
+mkdir -p ~/projects
+cd ~/projects
+git clone <your-github-repo-url>
+cd market
+
+Check Python availability:
+
+python3 --version
+module avail python
+
+
+==================================================
+2. CREATE THE PYTHON ENVIRONMENT
+==================================================
+
+All model scripts use the same project environment. Python 3.12 is available
+directly as an ORCA module and is compatible with the full requirements.txt.
+
+deactivate 2>/dev/null || true
+module purge
+module load python/3.12
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+python --version
+
+
+
+
+==================================================
+3. SUBMIT THE SLURM JOB
+==================================================
+
+From the project directory:
+
+cd ~/projects/market
+sbatch run_all.slurm
+
+Slurm should return a job ID, for example:
+
+Submitted batch job 123456
+
+To run only the NN scripts (`base_NN.py` then `NN.py`):
+
+cd ~/projects/market
+sbatch run_nn.slurm
+
+To run only one NN script instead of both:
+
+RUN_BOTH=0 NN_SCRIPT=PyScripts/Models/base_NN.py sbatch run_nn.slurm
+RUN_BOTH=0 sbatch run_nn.slurm
+
+
+==================================================
+4. MONITOR THE JOB
+==================================================
+
+When you are back on ORCA:
+ssh orca
+cd ~/projects/market
+squeue -u $USER
+tail -n 50 output/all_pipeline.log
+cat output/all_pipeline_state.json
+
+
+
+Check whether it is queued or running:
+
+squeue -u $USER
+
+
+tail -f all_models-<jobid>.out
+tail -f output/all_pipeline.log
+squeue -u $USER
+
+
+
+==================================================
+5. WHERE OUTPUTS AND CHECKPOINTS GO
+==================================================
+
+The Slurm logs are written in the repo root:
+
+- all_models-<jobid>.out
+- all_models-<jobid>.err
+
+The pipeline itself writes outputs inside:
+
+output/
+
+Important files created by PyScripts/Models/All.py:
+
+- output/all_pipeline.log
+- output/all_pipeline_state.json
+- output/model_*.log
+- output/*.tex
+- output/*.png
+- output/*.csv
+
+Useful commands:
+
+ls output
+tail -f output/all_pipeline.log
+cat output/all_pipeline_state.json
+
+To inspect more files and checkpoint directories:
+
+find output -maxdepth 3 | sort
+
+
+To copy checkpoint history to your local computer (after you have already set up your SSH config):
+scp -r orca:~/projects/market/output/checkpoints ~/market_checkpoints/
+
+
+==================================================
+5B. ACCESS NEWLY CREATED OUTPUT FILES
+==================================================
+
+After the Slurm job finishes, log into ORCA and go to the repo:
+ssh orca
+cd ~/projects/market
+
+List everything currently in output/:
+ls output
+
+List all files recursively in sorted order:
+find output -type f | sort
+
+See the newest files first:
+ls -lt output
+
+Check the pipeline status:
+cat output/all_pipeline_state.json
+
+Check the pipeline log:
+tail -n 50 output/all_pipeline.log
+
+To copy the whole tex and png output from ORCA to your local machine, run this
+from your LOCAL terminal, not from inside ORCA:
+scp 'orca:~/projects/market/output/*.png' ~/market/output/
+scp 'orca:~/projects/market/output/*.tex' ~/market/output/
+==================================================
+6. EXPECTED RUNTIMES (FRESH RUN — NO CHECKPOINTS)
+==================================================
+
+Checkpoints are NOT included in the repository (~1 GB, too large for GitHub).
+A fresh clone requires a full training run. Runtimes below are
+measured on the 8-year dataset on ORCA with 6 CPUs / 48 GB RAM.
+
+run_all.slurm  (non-NN models, ~11 hrs total):
+
+  base.py                  ~6 min
+  base_rf.py   ~48 min
+  base_SVM.py              ~7 min
+  lr.py   ~9 min
+  rf.py        **9+ hrs**   (RF grid is large; dominates)
+  SVM.py                  ~56 min
+
+run_nn.slurm  (NN scripts — measured on local Mac, ORCA times will differ):
+
+  base_NN.py   epoch CV sweep: ~2 min  |  model eval (with checkpoints): <1 min
+  NN.py        epoch CV sweep: ~12 min |  model eval (with checkpoints): <1 min
+
+  Note: full fresh-run training times are not in the log (original runs were
+  not captured). The epoch CV sweep timings above are from local Mac runs
+  (checkpoint timestamps: 2026-03-15 17:41–17:43 for base_NN, 17:55–18:07
+  for NN). ORCA with 6 CPUs may be faster or slower than a Mac M-chip.
+
+On a rerun where checkpoints already exist locally, --resume skips completed
+stages and most scripts finish in under 5 minutes.
+
+Time limits set in the slurm files:
+  run_all.slurm        18 hrs  (covers worst-case RF)
+  run_nn.slurm          8 hrs  (covers both base_NN + NN with epoch sweep)
+
+==================================================
+7. RESUME / CHECKPOINT BEHAVIOR
+==================================================
+
+Rerunning the Slurm job skips completed stages automatically.
+run_all.slurm runs All.py with:
+
+python PyScripts/Models/All.py --resume --n-jobs ...
+
+This means rerunning the Slurm job should skip completed stages based on
+the saved pipeline state and stage checkpoints in output/.
+
+To inspect current pipeline progress:
+
+cat output/all_pipeline_state.json
+
+
+==================================================
+8. LATER RERUNS AFTER YOU UPDATE THE REPO
+==================================================
+
+SSH into ORCA:
+
+ssh your_username@orca
+
+Go to the repo:
+
+cd ~/projects/market
+
+Pull the latest changes:
+
+git pull
+
+Activate the environment:
+
+source .venv/bin/activate
+
+If requirements changed:
+
+pip install -r requirements.txt
+
+Submit again:
+
+sbatch run_all.slurm
+
+==================================================
+9. QUICK REFERENCE
+==================================================
+
+--- For the project environment (Python 3.12) ---
+
+ssh your_username@orca
+cd ~/projects
+git clone <your-github-repo-url>
+cd market
+module load python/3.12
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+sbatch run_all.slurm
+squeue -u $USER
+tail -f all_models-<jobid>.out
+tail -f output/all_pipeline.log
+cat output/all_pipeline_state.json
+
+
+==================================================
+10. NOTES
+==================================================
+
+- ORCA provides Python 3.9 (default), 3.12, and 3.13 as modules.
+- Check available versions with:
+  python3 --version
+  module avail python
+- Use Python 3.12 for this project environment on ORCA.
+- All model scripts can be run from the same `.venv`.
+- The repo and virtual environment will live on ORCA after setup.
+- Slurm submits the job from ORCA; it does not copy your repo there for you.
